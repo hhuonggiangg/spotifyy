@@ -1,0 +1,57 @@
+"""
+Vercel serverless function: POST /api/predict
+
+Body (JSON): { dance, energy, valence, acoustic, speech, live, tempo }
+Returns:     { score, badge }
+
+Lightweight on purpose — no scikit-learn — so it deploys on Vercel without
+hitting the serverless bundle-size limit. If you later want to serve a real
+trained model, load it here (and add the dependency to api/requirements.txt),
+keeping the total bundle under Vercel's size cap.
+"""
+from http.server import BaseHTTPRequestHandler
+import json
+
+
+def _score(f):
+    d = float(f.get("dance", 0))
+    e = float(f.get("energy", 0))
+    v = float(f.get("valence", 0))
+    # Same formula as the original app's fallback predictor.
+    s = d * 30 + e * 25 + v * 20 + 25
+    return max(0.0, min(100.0, s))
+
+
+def _badge(s):
+    if s >= 80:
+        return "HIT"
+    if s >= 60:
+        return "STRONG"
+    return "POTENTIAL"
+
+
+class handler(BaseHTTPRequestHandler):
+    def _send(self, code, payload):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+        self.wfile.write(json.dumps(payload).encode())
+
+    def do_OPTIONS(self):
+        self._send(204, {})
+
+    def do_POST(self):
+        try:
+            length = int(self.headers.get("content-length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            feats = json.loads(raw or b"{}")
+            s = _score(feats)
+            self._send(200, {"score": round(s, 1), "badge": _badge(s)})
+        except Exception as exc:  # noqa: BLE001
+            self._send(400, {"error": str(exc)})
+
+    def do_GET(self):
+        self._send(200, {"ok": True, "usage": "POST audio features to get a score"})
